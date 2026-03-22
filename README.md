@@ -14,14 +14,14 @@ Das Programm misst eine Laufzeit fuer eine Speedwall-Anwendung:
 
 ## Bilder
 
-### Aufbau
+### Aktuell
 
 ![Speedometer Aufbau](speedometer.jpeg)
 
-### Layout
+### Wiederstände zum einstellen
 
 ![Speedometer Layout](speedometer_layout.jpeg)
 
-### Arduino Nano Pinout
+### Boardlayout
 
-![Arduino Nano Pinout](arduino%20nano%20pinout.JPG)
+![Arduino Nano Pinout](dav_speedometer_layout.JPG)
