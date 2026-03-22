@@ -24,4 +24,4 @@ Das Programm misst eine Laufzeit fuer eine Speedwall-Anwendung:
 
 ### Boardlayout
 
-![Arduino Nano Pinout](dav_speedometer_layout.png)
+![Board-Layout](dav_speedometer_layout.png)
