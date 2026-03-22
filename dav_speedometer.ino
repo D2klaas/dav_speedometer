@@ -1,12 +1,12 @@
 #include <Wire.h>
 #include <LiquidCrystal.h>
-
+#include "BigNum.h"
 
 // Pins
 const int sensorPin = A0;
 const int buttonPin = A3;
 const int goalPin = A2;
-const int buzzerPin = A1;
+const int buzzerPin = 5;
 
 //LCD Pins
 const int lcd_rs = 2;
@@ -18,6 +18,7 @@ const int lcd_d7 = 12;
 
 
 LiquidCrystal lcd(lcd_rs, lcd_e, lcd_d4, lcd_d5, lcd_d6, lcd_d7);
+static BigNum bn(&lcd);
 
 // Sensorwerte
 int sensorValue = 0;
@@ -27,6 +28,14 @@ int thresholdLow = 800;
 int thresholdHigh = 900;
 
 bool matOccupied = false;
+bool matUp = false;
+bool matDown = false;
+unsigned long matPressedTime;
+
+bool flipflap = true;
+bool flipflapUp = true;
+unsigned long flipflapTime;
+const unsigned long flipflapPause = 500;
 
 // Timer
 unsigned long startTime = 0;
@@ -38,103 +47,26 @@ enum State {
 	ARMED,
 	RUNNING,
 	FINISHED,
-	DEBUG
+	DEBUG,
+	PREDEBUG,
 };
 
-State state = DEBUG;
+State state = READY;
 
 // Button Timing
 unsigned long buttonPressTime = 0;
 bool buttonHeld = false;
+bool buttonUp = false;
+bool buttonDown = false;
 
 //beeper
 unsigned long beepEnd = 0;
 
-// ----------------------------
-
-// Big font segments (custom chars 0..4)
-const byte SEG_L = 0;
-const byte SEG_R = 1;
-const byte SEG_T = 2;
-const byte SEG_B = 3;
-const byte SEG_DOT = 4;
-const byte SEG_SPACE = 255;
-
-void initBigFont() {
-  byte leftBar[8]  = { B10000, B10000, B10000, B10000, B10000, B10000, B10000, B10000 };
-  byte rightBar[8] = { B00001, B00001, B00001, B00001, B00001, B00001, B00001, B00001 };
-  byte topBar[8]   = { B11111, B00000, B00000, B00000, B00000, B00000, B00000, B00000 };
-  byte botBar[8]   = { B00000, B00000, B00000, B00000, B00000, B00000, B00000, B11111 };
-  byte dotChar[8]  = { B00000, B00000, B00000, B00000, B00000, B00000, B00100, B00100 };
-
-  lcd.createChar(SEG_L, leftBar);
-  lcd.createChar(SEG_R, rightBar);
-  lcd.createChar(SEG_T, topBar);
-  lcd.createChar(SEG_B, botBar);
-  lcd.createChar(SEG_DOT, dotChar);
-}
-
-void writeSeg(byte seg) {
-  if (seg == SEG_SPACE) {
-    lcd.print(" ");
-  } else {
-    lcd.write(seg);
-  }
-}
-
-void drawBigChar(char c, int x) {
-  byte t0 = SEG_SPACE, t1 = SEG_SPACE, t2 = SEG_SPACE;
-  byte b0 = SEG_SPACE, b1 = SEG_SPACE, b2 = SEG_SPACE;
-
-  switch (c) {
-    case '0': t0=SEG_L; t1=SEG_T; t2=SEG_R; b0=SEG_L; b1=SEG_B; b2=SEG_R; break;
-    case '1': t2=SEG_R; b2=SEG_R; break;
-    case '2': t1=SEG_T; t2=SEG_R; b0=SEG_L; b1=SEG_B; break;
-    case '3': t1=SEG_T; t2=SEG_R; b1=SEG_B; b2=SEG_R; break;
-    case '4': t0=SEG_L; t2=SEG_R; b1=SEG_B; b2=SEG_R; break;
-    case '5': t0=SEG_L; t1=SEG_T; b1=SEG_B; b2=SEG_R; break;
-    case '6': t0=SEG_L; t1=SEG_T; b0=SEG_L; b1=SEG_B; b2=SEG_R; break;
-    case '7': t1=SEG_T; t2=SEG_R; b2=SEG_R; break;
-    case '8': t0=SEG_L; t1=SEG_T; t2=SEG_R; b0=SEG_L; b1=SEG_B; b2=SEG_R; break;
-    case '9': t0=SEG_L; t1=SEG_T; t2=SEG_R; b1=SEG_B; b2=SEG_R; break;
-    case '.': b1=SEG_DOT; break;
-    default: break;
-  }
-
-  lcd.setCursor(x, 0);
-  writeSeg(t0); writeSeg(t1); writeSeg(t2);
-  lcd.setCursor(x, 1);
-  writeSeg(b0); writeSeg(b1); writeSeg(b2);
-}
-
-void lcd_print_big_time(float seconds, int x, int decimals = 2) {
-  char buf[16];
-  dtostrf(seconds, 0, decimals, buf);
-
-  Serial.print("BIGTIME: ");
-  Serial.println(buf);
-
-  int len = strlen(buf);
-  int maxChars = (16 - x) / 3;
-  if (len > maxChars) len = maxChars;
-
-  // clear area (both rows)
-  lcd.setCursor(x, 0);
-  for (int i = 0; i < len * 3; i++) lcd.print(" ");
-  lcd.setCursor(x, 1);
-  for (int i = 0; i < len * 3; i++) lcd.print(" ");
-
-  int pos = x;
-  for (int i = 0; i < len; i++) {
-    drawBigChar(buf[i], pos);
-    pos += 3;
-  }
-}
 
 void handleBeep() {
-  if( beepEnd < millis() ){
-    noTone(buzzerPin);
-  }
+	if( beepEnd < millis() ){
+		noTone(buzzerPin);
+	}
 }
 
 void beep(int freq, int duration) {
@@ -163,8 +95,19 @@ void lcd_print(const char* msg, int x, int y) {
 	Serial.println(msg);
 }
 
-void lcd_print(float value, int x, int y) {
+void lcd_print(const __FlashStringHelper* msg, int x, int y) {
+  lcd.setCursor(x, y);
+  lcd.print(msg);
 
+  Serial.print(F("LCD["));
+  Serial.print(x);
+  Serial.print(F(","));
+  Serial.print(y);
+  Serial.print(F("]: "));
+  Serial.println(msg);
+}
+
+void lcd_print(float value, int x, int y) {
 	lcd.setCursor(x, y);
 	lcd.print(value);
 
@@ -187,15 +130,20 @@ void lcd_print_padded(float value, int x, int y, int width, int precision = 2) {
 // ----------------------------
 
 void updateMatState() {
+	matUp = false;
+	matDown = false;
 	if (sensorValue <= thresholdLow) {
 		if( matOccupied != true){
-			beep(2800, 60);
+			matDown = true;
+			matPressedTime = millis();
+			beep(500, 60);
 		}
 		matOccupied = true;
 	} 
 	else if (sensorValue >= thresholdHigh) {
 		if( matOccupied == true){
-			beep(400, 60);
+			matUp = true;
+			beep(100, 60);
 		}
 		matOccupied = false;
 	}
@@ -220,22 +168,30 @@ void setup() {
 
 	Serial.begin(115200);
 
-  lcd.begin(16, 2);
-  initBigFont();
+	lcd.begin(16, 2);
+	bn.begin();
+
+
+	lcd.clear();
+	lcd.noCursor();
+	lcd_print(F("DAV Speedometer"),0, 0);
+	lcd_print(F("version 0.1"),0,1);
 
 	startupBeep();
 
-	lcd_print("Speedwall Timer",0, 0);
-	lcd_print("Bereit",0,1);
-	state = DEBUG;
-
 	delay(1500);
-	lcd.clear();
+	startReady();
 }
 
 // ----------------------------
 
 void loop() {
+	flipflapUp = false;
+	if( flipflapTime < millis() ){
+		flipflap = !flipflap;
+		flipflapTime = millis() + flipflapPause;
+		flipflapUp = true;
+	}
 
 	sensorValue = readSensorAverage(sensorPin, 10);
 	updateMatState();
@@ -243,18 +199,21 @@ void loop() {
 	bool buttonPressed = !digitalRead(buttonPin);
 	bool goalPressed = !digitalRead(goalPin);
 
-	handleButton(buttonPressed);
 	handleBeep();
 	
 	switch (state) {
 
 		case READY:{
+			handleButton(buttonPressed);
 
-			lcd_print("Bereit        ",0,0);
+			if( flipflap && flipflapUp ){
+				lcd_print(F("betreten"),7,0);
+			}else if( flipflapUp){
+				lcd_print(F("        "),7,0);
+			}
 
-			if (matOccupied) {
-				state = ARMED;
-				beep(2000, 80);
+			if (matDown) {
+				startArmed();
 			}
 
 			break;
@@ -262,15 +221,20 @@ void loop() {
 		// ------------------------
 
 		case ARMED:{
+			if( flipflapUp ){
+				beep( 3000, 20 );
+			}
 
-			lcd_print("Start bereit  ",0,0);
+			if( flipflap ){
+				lcd_print("Go",6,1);
+			}else{
+				lcd_print("  ",6,1);
+			}
 
-			if (!matOccupied) {
-
+			//kletterer verlässt Matte
+			if (matUp) {
 				startTime = millis();
-				state = RUNNING;
-
-				beep(2500, 80);
+				startRunning();
 			}
 
 			break;
@@ -278,17 +242,36 @@ void loop() {
 		// ------------------------
 
 		case RUNNING:{
-
 			unsigned long t = millis() - startTime;
 
-      lcd_print_big_time(t / 1000.0, 0, 2);
+			if( matDown && t < 2000 ){
+				//läuft, aber abbruch wenn unter 2 sekunden (kurzes abheben)
+				startArmed();
+			} else if( matOccupied ){
+				//nach 2 sekunden, auf die matte gehen ist abbruch
+				//neustart kondition wenn ziel nicht erreicht wird
+				if( flipflap ){
+					lcd_print(F("    Abbruch!    "),0,0);
+					lcd_print(F("                "),0,1);
+				}else{
+					lcd_print(F("                "),0,0);
+					lcd_print(F("                "),0,1);
+				}
+			} else if( matUp ){
+				//wenn nach dem abbruch die matte verlassen wird, gehe wieder auf ready
+				startReady();
+			} else {
+				//keine mattenberührung, timer läuft weiter
+				bn.setDoubleFont();
+				bn.writeNumber(0,4,t / 1000.0, 4,false);
+				bn.writeNumber(0,8,t % 1000, 4);
+				bn.setSingleFont();
+				lcd_print("sec",13,1);
+				lcd_print(".",8,1);
+			}
 
 			if (goalPressed) {
-
-				stopTime = millis();
-				state = FINISHED;
-
-				beep(3000, 150);
+				startFinished();
 			}
 
 			break;
@@ -296,23 +279,35 @@ void loop() {
 		// ------------------------
 
 		case FINISHED:{
-
-			lcd_print("Ergebnis:",0,0);
-
-
-			float result = (stopTime - startTime) / 1000.0;
-			lcd_print_padded(t / 1000.0, 9, 0, 10, 2);
+			if( flipflap && flipflapUp ){
+				lcd_print(F("Zeit"),0,0);
+			}else if( flipflapUp){
+				lcd_print(F("    "),0,0);
+			}
+			if (matUp) {
+				startReady();
+			}
 
 			break;
 		}
+		
 		// ------------------------
-
 		case DEBUG: {
+			lcd_print_padded(sensorValue,0,1,4,0);
 
-			//lcd_print("Sensor:",0,0);
+			handleButton(buttonPressed);
+			if (buttonUp) {
+				startReady();
+			}
 
-			lcd_print(sensorValue,0,1);
+			break;
+		}
 
+		case PREDEBUG: {
+			handleButton(buttonPressed);
+			if (buttonUp) {
+				state = DEBUG;
+			}
 			break;
 		}
 	}
@@ -321,13 +316,30 @@ void loop() {
 // ----------------------------
 
 void handleButton(bool pressed) {
+	buttonUp = false;
+	buttonDown = false;
+
 	if (pressed && !buttonHeld) {
 		beep(800, 60);
 		buttonHeld = true;
 		buttonPressTime = millis();
+		buttonDown = true;
 	}
 
 	if (!pressed && buttonHeld) {
+		buttonUp = true;
+	}
+
+	if (pressed && buttonHeld && state != DEBUG) {
+		unsigned long pressDuration = millis() - buttonPressTime;
+
+		// langer Druck
+		if (pressDuration > 1500){
+			startDebug();
+		}
+	}
+
+	if (buttonUp && state == READY) {
 		beep(1800, 60);
 
 		unsigned long pressDuration = millis() - buttonPressTime;
@@ -337,19 +349,62 @@ void handleButton(bool pressed) {
 		if (pressDuration < 1500) {
 			startCalibration();
 		}
-
-		// langer Druck
-		else {
-			state = DEBUG;
-		}
+	}
+	if (!pressed){
+		buttonHeld = false;
 	}
 }
 
 
 // ----------------------------
 
+void startReady() {
+	lcd.clear();
+	lcd_print(F("Bereit"), 0, 0);
+	state = READY;
+}
+
+// ----------------------------
+
+void startFinished() {
+	bn.setSingleFont();
+	stopTime = millis();
+	state = FINISHED;
+	startupBeep();
+}
+
+// ----------------------------
+
+void startArmed() {
+	lcd.clear();
+	lcd_print(F("Bereit zum Start"), 0, 0);
+	beep(2000, 80);
+	state = ARMED;
+}
+
+// ----------------------------
+
+void startRunning() {
+	lcd.clear();
+	beep(3000, 80);
+	state = RUNNING;
+}
+
+// ----------------------------
+
+void startDebug() {
+	lcd_print(F("Now   Lo    Hi  "), 0, 0);
+	lcd_print(F("0000  0000  0000"), 0, 1);
+	lcd_print_padded(thresholdLow,6,1,4,0);
+	lcd_print_padded(thresholdHigh,12,1,4,0);
+	state = PREDEBUG;
+}
+
+// ----------------------------
+
 void startCalibration() {
 	lcd.clear();
+	delay(2);
 	lcd_print("Von Matte", 0, 0);
 	lcd_print("absteigen", 0, 1);
 	delay(3000);
@@ -373,20 +428,11 @@ void startCalibration() {
 	thresholdHigh = mid + hyst;
 
 	lcd.clear();
-	lcd_print("Leer:", 0, 0);
-	lcd_print((float)emptyValue, 6, 0);
-	lcd.setCursor(0, 1);
-	lcd.print("Last:");
-	lcd.print(loadValue);
-	delay(2000);
-
-	lcd.clear();
 	lcd_print("Low:", 0, 0);
-	lcd_print((float)thresholdLow, 5, 0);
-	lcd.setCursor(0, 1);
-	lcd.print("High:");
-	lcd.print(thresholdHigh);
-	delay(2000);
+	lcd_print(thresholdLow, 6, 0);
+	lcd_print("High:",0,1);
+	lcd_print(thresholdHigh,6,1);
+	delay(4000);
 
-	state = READY;
+	startReady();
 }
